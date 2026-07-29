@@ -15,7 +15,7 @@
 #   KITTI:    https://www.cvlibs.net/datasets/kitti/           (raw OXTS logs)
 #   nuScenes: https://www.nuscenes.org/                        (ego_pose.json)
 #   ONCE:     https://once-for-auto-driving.github.io/         (per-frame pose)
-
+ 
 class KITTIAdapter:
     """
     Reads KITTI raw OXTS (GPS/IMU) logs at `<root>/oxts/data/*.txt` -- one
@@ -23,10 +23,10 @@ class KITTIAdapter:
     Field index 8 is `vf`, forward velocity in m/s (see KITTI's
     `dataformat.txt`); that's the empirical speed signal extracted here.
     """
-
+ 
     def __init__(self, root_dir: str):
         self.root_dir = root_dir
-
+ 
     def speed_samples(self) -> np.ndarray:
         oxts_dir = os.path.join(self.root_dir, "oxts", "data")
         speeds = []
@@ -39,8 +39,8 @@ class KITTIAdapter:
                 if len(vals) >= 9:
                     speeds.append(float(vals[8]))   # vf: forward velocity
         return np.array(speeds, dtype=float)
-
-
+ 
+ 
 class NuScenesAdapter:
     """
     Reads a nuScenes-style `<root>/<split>/ego_pose.json`: a list of records
@@ -48,11 +48,11 @@ class NuScenesAdapter:
     Speed is estimated by finite-differencing consecutive ego positions,
     since nuScenes doesn't store speed directly on the ego_pose record.
     """
-
+ 
     def __init__(self, root_dir: str, split: str = "v1.0-mini"):
         self.root_dir = root_dir
         self.split = split
-
+ 
     def speed_samples(self) -> np.ndarray:
         path = os.path.join(self.root_dir, self.split, "ego_pose.json")
         if not os.path.isfile(path):
@@ -68,8 +68,8 @@ class NuScenesAdapter:
             dx = np.array(b["translation"][:2]) - np.array(a["translation"][:2])
             speeds.append(float(np.linalg.norm(dx)) / dt)   # planar speed
         return np.array(speeds, dtype=float)
-
-
+ 
+ 
 class ONCEAdapter:
     """
     Reads a ONCE-style per-sequence annotation file at
@@ -78,12 +78,12 @@ class ONCEAdapter:
     speed is estimated the same way as nuScenes, by finite-differencing
     consecutive frame positions.
     """
-
+ 
     def __init__(self, root_dir: str, seq_id: str, frame_rate_hz: float = 10.0):
         self.root_dir = root_dir
         self.seq_id = seq_id
         self.frame_rate_hz = frame_rate_hz
-
+ 
     def speed_samples(self) -> np.ndarray:
         path = os.path.join(self.root_dir, self.seq_id, f"{self.seq_id}.json")
         if not os.path.isfile(path):
@@ -98,8 +98,8 @@ class ONCEAdapter:
             dx = np.array(b["pose"][:2]) - np.array(a["pose"][:2])
             speeds.append(float(np.linalg.norm(dx)) / dt)
         return np.array(speeds, dtype=float)
-
-
+ 
+ 
 class DrivingDatasetLibrary:
     """
     Thin unifying wrapper over the three adapters: pick a dataset by name,
@@ -111,22 +111,22 @@ class DrivingDatasetLibrary:
     case here since none of these datasets are actually present in this
     sandboxed environment.
     """
-
+ 
     ADAPTERS = {"kitti": KITTIAdapter, "nuscenes": NuScenesAdapter, "once": ONCEAdapter}
-
+ 
     def __init__(self, name: str, root_dir: str, **kwargs):
         name = name.lower()
         if name not in self.ADAPTERS:
             raise ValueError(f"Unknown dataset '{name}', expected one of {list(self.ADAPTERS)}")
         self.name = name
         self.adapter = self.ADAPTERS[name](root_dir, **kwargs)
-
+ 
     def speed_samples(self) -> np.ndarray:
         try:
             return self.adapter.speed_samples()
         except Exception:
             return np.array([])
-
+ 
     def sample_speeds(self, n: int, rng: np.random.Generator,
                        fallback_low: float = 15.0, fallback_high: float = 30.0) -> np.ndarray:
         """Bootstrap-resample n speeds from the empirical distribution, or
