@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------- #
 # V2X environment
 # --------------------------------------------------------------------------- #
-
+ 
 class V2XEnv:
     def __init__(self, cfg: V2XConfig):
         self.cfg = cfg
@@ -13,22 +13,22 @@ class V2XEnv:
             self.cluster_of[idx] = c
         self.cluster_lang = [np.eye(len(LANG_TASKS))[c % len(LANG_TASKS)]
                               for c in range(cfg.n_clusters)]
-
+ 
         self.edges = [EdgeServer(cfg.edge_capacity_cycles) for _ in range(cfg.n_edge_servers)]
         self.vla = VLAPipeline(message_dim=cfg.vla_message_dim, vision_dim=cfg.vision_dim,
                                 lang_dim=len(LANG_TASKS), action_dim=cfg.vla_action_dim,
                                 seed=cfg.seed + 7)
-
+ 
         obstacle_rng = np.random.default_rng(cfg.seed + 99)   # fixed infrastructure, independent of episode rng
         self.obstacles = self._place_obstacles(obstacle_rng)
-
+ 
         self.dataset_lib = None
         if cfg.dataset_name and cfg.dataset_root:
             try:
                 self.dataset_lib = DrivingDatasetLibrary(cfg.dataset_name, cfg.dataset_root, **cfg.dataset_kwargs)
             except Exception:
                 self.dataset_lib = None   # bad name/kwargs -> fall back to the synthetic draw, same as no dataset
-
+ 
         # OD-pair path-change trip history (t = steps without a lane
         # change, t_c = steps with one) -- persists ACROSS episodes/resets,
         # since it represents a vehicle's accumulating trip history along a
@@ -40,7 +40,7 @@ class V2XEnv:
         self._last_RT = np.ones(self.n)
         self._last_K = np.zeros(self.n)
         self._last_rv = np.ones(self.n)
-
+ 
         # Disaster-conditioned version of the same counts: Risk Tolerance is
         # specifically defined as path changes "during a natural disaster",
         # so this only accumulates on steps where disaster_active is True.
@@ -49,7 +49,7 @@ class V2XEnv:
         self._last_RT_disaster = np.ones(self.n)
         self._last_K_disaster = np.zeros(self.n)
         self._last_rv_disaster = np.ones(self.n)
-
+ 
         # digital twins: one per cluster over [mean_queue, mean_gain] (EDGE
         # twins -- modeled from nearby FAST-moving vehicles), one shared over
         # edge-server queue lengths, and one fleet-wide CLOUD twin over
@@ -62,9 +62,9 @@ class V2XEnv:
                                       cfg.twin_obs_noise_std, seed=cfg.seed + 50)
         self.cloud_twin = DigitalTwin(3, cfg.twin_alpha, cfg.twin_beta,
                                        cfg.twin_obs_noise_std, seed=cfg.seed + 60)
-
+ 
         self.reset()
-
+ 
     def _place_obstacles(self, rng: np.random.Generator):
         """Fixed roadside infrastructure, placed once (not re-randomized
         every episode): WALLS block the RSU's line-of-sight over a
@@ -86,14 +86,14 @@ class V2XEnv:
                                    end=(s + cfg.construction_length_m) % L,
                                    lat_center=lat_center))
         return obstacles
-
+ 
     def _pos_in_segment(self, pos: np.ndarray, start: float, end: float) -> np.ndarray:
         """Whether each position falls in [start, end] along the circular
         road (end < start means the segment wraps around 0)."""
         if end >= start:
             return (pos >= start) & (pos <= end)
         return (pos >= start) | (pos <= end)
-
+ 
     def _obstacle_features(self):
         """Per vehicle: wall signal-blockage (dB), whether it's inside a
         construction zone, whether it's laterally stuck in that zone's
@@ -118,7 +118,7 @@ class V2XEnv:
             forward_dist = (obs["start"] - self.pos) % L
             nearest_dist = np.minimum(nearest_dist, forward_dist)
         return wall_blockage_db, construction_zone, lane_conflict, nearest_dist
-
+ 
     def reset(self):
         cfg = self.cfg
         self.pos = self.rng.uniform(0, cfg.road_length_m, self.n)
@@ -153,7 +153,7 @@ class V2XEnv:
                                        cfg.twin_obs_noise_std, seed=cfg.seed + 60)
         self._last_obstacle_feats = self._obstacle_features()
         return self._manager_states(), None
-
+ 
     def tick_disaster(self):
         """Stochastically start/continue/end a natural-disaster event (e.g.
         storm/flood): while active it adds extra signal blockage, raises the
@@ -170,15 +170,15 @@ class V2XEnv:
             self.disaster_active = True
             self.disaster_remaining = cfg.disaster_duration_steps
             self.disaster_edge_id = int(self.rng.integers(0, cfg.n_edge_servers))
-
+ 
         for e_id, edge in enumerate(self.edges):
             if self.disaster_active and e_id == self.disaster_edge_id:
                 edge.capacity = edge.capacity_base * cfg.disaster_edge_capacity_factor
             else:
                 edge.capacity = edge.capacity_base
-
+ 
     # ---- physical layer -----------------------------------------------------
-
+ 
     def _zone_of(self, pos: np.ndarray) -> np.ndarray:
         """Which environmental-complexity zone a position falls in: 0 =
         open/highway ... n_zones-1 = dense-urban. Complexity here is an
@@ -187,7 +187,7 @@ class V2XEnv:
         nearby (see `_neighbor_features`)."""
         frac = pos / self.cfg.road_length_m
         return np.clip((frac * self.cfg.n_zones).astype(int), 0, self.cfg.n_zones - 1)
-
+ 
     def _apply_drive_kinematics(self, drive_actions: np.ndarray):
         """Advance velocity, steering angle, and lateral (cross-road)
         position according to the discrete driving action (forward / left /
@@ -207,12 +207,12 @@ class V2XEnv:
         if self.disaster_active:
             desired_speed = desired_speed * cfg.disaster_speed_factor
         desired_speed = np.where(construction_zone, desired_speed * cfg.construction_speed_factor, desired_speed)
-
+ 
         accel = np.where(drive_actions == DRIVE_FORWARD, cfg.drive_accel_gain * (desired_speed - self.vel),
                           np.where(drive_actions == DRIVE_REVERSE, -cfg.drive_reverse_decel, 0.0))
         self.vel = np.clip(self.vel + accel * 0.1, cfg.drive_min_speed,
                             cfg.zone_speed_base * cfg.drive_max_speed_factor)
-
+ 
         steer_target = np.where(
             drive_actions == DRIVE_LEFT, cfg.max_steering_rad * cfg.drive_turn_steering_frac,
             np.where(drive_actions == DRIVE_RIGHT, -cfg.max_steering_rad * cfg.drive_turn_steering_frac, 0.0))
@@ -226,7 +226,7 @@ class V2XEnv:
         lat_max = (cfg.n_lanes * cfg.lane_width_m) / 2.0
         self.lat_pos = np.clip(self.lat_pos + self.vel * np.sin(self.steering_angle) * 0.1,
                                 -lat_max, lat_max)
-
+ 
     def _k_nearest(self, k: int):
         """For every vehicle: 2D (longitudinal-wrap + lateral) Euclidean
         distance, and the speeds, of its k nearest other vehicles (fewer if
@@ -247,7 +247,7 @@ class V2XEnv:
         dists = np.take_along_axis(dist, idx, axis=1)
         speeds = self.vel[idx]
         return idx, dists, speeds
-
+ 
     def _lateral_space(self):
         """Per vehicle: open lateral space to the left and to the right --
         distance to the road boundary on that side, reduced by any nearby
@@ -272,7 +272,7 @@ class V2XEnv:
             if right_mask.any():
                 right_space[i] = min(right_space[i], np.abs(lat_diff[i][right_mask]).min())
         return left_space, right_space
-
+ 
     def _raw_neighbor_gaps(self):
         """Per vehicle: signed longitudinal gap (meters) and lateral gap
         (meters) to its single nearest neighbor (by longitudinal distance,
@@ -290,7 +290,7 @@ class V2XEnv:
             long_gap[i] = dx_signed[j]
             lat_gap[i] = self.lat_pos[j] - self.lat_pos[i]
         return long_gap, lat_gap
-
+ 
     def _nearest_neighbor_rel(self):
         """Normalized (state-ready) version of `_raw_neighbor_gaps`: signed
         relative LONGITUDINAL distance and relative LATERAL distance to the
@@ -302,10 +302,17 @@ class V2XEnv:
         rel_long = np.clip(long_gap / cfg.comm_range_m, -2.0, 2.0)
         rel_lat = lat_gap / max(lat_max, 1e-6)
         return rel_long, rel_lat
-
+ 
     def _channel_gain_db(self):
-        rsu_pos = self.cfg.road_length_m / 2.0
-        dist = np.abs(self.pos - rsu_pos)
+        # n_rsus RSUs evenly distributed along the road (not one at the
+        # midpoint); each vehicle connects to its NEAREST RSU, distance
+        # measured with proper circular wraparound since the road loops.
+        L = self.cfg.road_length_m
+        n_rsus = self.cfg.n_rsus
+        rsu_positions = np.linspace(0, L, n_rsus, endpoint=False) + L / (2 * n_rsus)
+        diff = np.abs(self.pos[:, None] - rsu_positions[None, :])
+        diff = np.minimum(diff, L - diff)   # circular wraparound
+        dist = diff.min(axis=1)             # nearest RSU per vehicle
         pl = path_loss_db(dist)
         zone = self._zone_of(self.pos)
         extra_blockage_db = zone * self.cfg.zone_blockage_db_per_level
@@ -315,7 +322,7 @@ class V2XEnv:
         extra_blockage_db = extra_blockage_db + wall_blockage_db
         fading_db = 10 * np.log10(rayleigh_fading(self.rng, self.n) + 1e-6)
         return -pl - extra_blockage_db + fading_db
-
+ 
     def _neighbor_features(self, intents: np.ndarray) -> np.ndarray:
         """V2V: driving/warning information vehicles exchange directly with
         each other. Per vehicle: [neighbor_count_norm, mean_relative_speed_norm,
@@ -340,26 +347,26 @@ class V2XEnv:
                 rel_speed = mean_q = hazard_frac = 0.0
             feats[i] = [len(idxs) / max(self.n - 1, 1), rel_speed, mean_q, hazard_frac]
         return feats
-
+ 
     # ---- state builders -------------------------------------------------------
-
+ 
     def _is_fast_vehicle(self) -> np.ndarray:
         """Which vehicles are currently "fast" (modeled by EDGE digital
         twins) vs "slow" (modeled by the CLOUD digital twin)."""
         return self.vel > self.cfg.fast_vehicle_speed_threshold
-
+ 
     def sync_twins(self):
         """Sync every digital twin with the current real state (called once
         per environment step, independent of when managers/workers actually
         act on the resulting estimate).
-
+ 
         EDGE digital twins (`cluster_twins`) model nearby FAST-moving
         vehicles and their surrounding roads -- each cluster's twin syncs
         from that cluster's fast vehicles specifically (falling back to the
         whole cluster if none are currently fast), serving the
         communication network and sub-objective (RB/interval) generation
         for the hierarchical MARL's managers and workers.
-
+ 
         The CLOUD digital twin (`cloud_twin`) models SLOW-moving vehicles
         and surrounding traffic infrastructure/objects at fleet scale --
         it syncs from every slow vehicle's queue state, the current edge-
@@ -377,7 +384,7 @@ class V2XEnv:
             self.cluster_twins[c].sync(np.array([mean_q, mean_g]))
         edge_loads = np.array([e.queue_len() for e in self.edges], dtype=float) / 10.0
         self.edge_twin.sync(edge_loads)
-
+ 
         slow_idx = np.where(~is_fast)[0]
         use_slow = slow_idx if len(slow_idx) > 0 else np.arange(self.n)
         mean_slow_q = self.queue[use_slow].mean() / self.cfg.max_queue_bits
@@ -385,18 +392,18 @@ class V2XEnv:
         wall_blockage_db, construction_zone, _, _ = self._last_obstacle_feats
         mean_obstacle_exposure = float(((wall_blockage_db > 0) | construction_zone).mean())
         self.cloud_twin.sync(np.array([mean_slow_q, mean_edge_load, mean_obstacle_exposure]))
-
+ 
     def _cloud_state(self) -> np.ndarray:
         """State for the centralized CloudController: the cloud digital
         twin's forecast over its whole coordination window."""
         forecast = self.cloud_twin.predict(self.cfg.cloud_period * self.cfg.high_level_period)
         return np.clip(forecast, 0, 2)
-
+ 
     def apply_cloud_mode(self, mode: int):
         """Broadcast the CloudController's chosen global coordination mode
         -- every manager and worker sees it as part of their own state."""
         self.cloud_mode = mode
-
+ 
     def _manager_states(self):
         """Per-cluster state for the high-level policy, built from the
         digital twin's FORECAST (proactive) rather than a raw reading, plus
@@ -433,7 +440,7 @@ class V2XEnv:
                                             mean_zone, mean_density, disaster_flag, mean_K, mean_rv,
                                             mean_obstacle], cloud_mode_onehot]))
         return states
-
+ 
     def _worker_states(self, subgoals: np.ndarray, intents: np.ndarray, decoded_actions: np.ndarray):
         cfg = self.cfg
         gain_db = self._last_gain_db
@@ -461,9 +468,9 @@ class V2XEnv:
                                            intent_onehot, decoded_actions[i], neighbor_feats[i],
                                            driving_feats, risk_feats, obstacle_feats, cloud_mode_onehot]))
         return states
-
+ 
     # ---- perception (VLA: encode -> process -> decode) -------------------------
-
+ 
     def run_vla(self):
         """For every vehicle: build the V2X message it is transmitting this
         step, run it through the VLA pipeline (encode -> process -> decode),
@@ -481,12 +488,12 @@ class V2XEnv:
         hazard_prob_local = np.clip(cfg.hazard_prob * hazard_mult, 0, 1)
         hazard_flag = (self.rng.random(self.n) < hazard_prob_local).astype(float)
         self._last_hazard_flag = hazard_flag
-
+ 
         intents = np.zeros(self.n, dtype=int)
         decoded_actions = np.zeros((self.n, cfg.vla_action_dim))
         recon_mse = np.zeros(self.n)
         cluster_hazard_count = np.zeros(cfg.n_clusters)
-
+ 
         for i in range(self.n):
             # ---- the information this vehicle is actually transmitting: a
             # compact V2X status message (position, speed, lateral offset,
@@ -505,23 +512,23 @@ class V2XEnv:
             vision = self.rng.normal(0, 0.3, cfg.vision_dim)
             vision[0] += hazard_flag[i]                       # informative hazard channel
             lang = self.cluster_lang[self.cluster_of[i]]       # app context for this vehicle's cluster
-
+ 
             intent_idx, probs, recon_message, decoded_action = self.vla.run(
                 message, vision, lang, self.rng)
-
+ 
             intents[i] = intent_idx
             decoded_actions[i] = decoded_action
             recon_mse[i] = float(np.mean((message - recon_message) ** 2))
             if intent_idx == VLAPipeline.INTENTS.index("hazard_alert"):
                 cluster_hazard_count[self.cluster_of[i]] += 1
-
+ 
         self._last_hazard_frac = [cluster_hazard_count[c] / len(idx)
                                    for c, idx in enumerate(self.clusters)]
         self._last_recon_mse = float(recon_mse.mean())
         return intents, decoded_actions
-
+ 
     # ---- dynamics -----------------------------------------------------------
-
+ 
     def apply_manager_actions(self, combined_actions: list[int]):
         """combined_actions[c] encodes (rb_choice, interval_choice) for
         cluster c via combined = rb_idx * n_intervals + interval_idx."""
@@ -531,7 +538,7 @@ class V2XEnv:
             interval_idx = combined_actions[c] % n_intervals
             self.rb_assignment[idx] = rb_idx
             self.cluster_interval[c] = self.cfg.comm_intervals[interval_idx]
-
+ 
     def driving_reward(self, drive_actions: np.ndarray):
         """The user-specified driving reward, evaluated after this step's
         motion:
@@ -551,7 +558,7 @@ class V2XEnv:
         risk-value calculation."""
         cfg = self.cfg
         idx, dists, speeds = self._k_nearest(cfg.n_surrounding_vehicles)
-
+ 
         if dists.shape[1] > 0:
             mean_neighbor_speed = speeds.mean(axis=1)
             d_eff = np.maximum(dists, cfg.safety_radius_m + 1e-2)   # guard d_i -> r+ (formula assumes d_i > r)
@@ -570,20 +577,20 @@ class V2XEnv:
         # encounter as dozens of "collisions".
         new_collision_event = collision & (~self.was_colliding)
         self.was_colliding = collision
-
+ 
         left_space, right_space = self._lateral_space()
         pivot = cfg.driving_tendency_neutral
         rz = pivot + np.clip(right_space - left_space, -pivot, pivot)
         r_dt = np.where(drive_actions == DRIVE_LEFT, -cfg.driving_tendency_factor * (rz - pivot),
                          np.where(drive_actions == DRIVE_RIGHT, cfg.driving_tendency_factor * (rz - pivot), 0.0))
-
+ 
         total = r_s + r_n + r_dt
         info = dict(speed_reward=float(r_s.mean()), safety_penalty=float(r_n.mean()),
                     tendency_reward=float(r_dt.mean()), mean_min_distance=float(min_dist.mean()),
                     safety_violation_rate=float(np.mean(safety_violation)),
                     n_collisions=int(new_collision_event.sum()))
         return total, info, safety_violation
-
+ 
     @staticmethod
     def _risk_from_counts(t: np.ndarray, t_c: np.ndarray):
         """RT, K, rv from raw (t, t_c) path-change counts:
@@ -599,7 +606,7 @@ class V2XEnv:
         K = np.where(p < 0.5, p / np.maximum(1.0 - p, 1e-9), 1.0)
         rv = 1.0 / np.maximum(RT + K, 1e-9)
         return RT, K, rv
-
+ 
     def _update_risk_metrics(self, drive_actions: np.ndarray):
         """Update every vehicle's OD-pair path-change trip history from
         this step's driving action (a LEFT/RIGHT is a "path change",
@@ -614,29 +621,29 @@ class V2XEnv:
         is_change = (drive_actions == DRIVE_LEFT) | (drive_actions == DRIVE_RIGHT)
         self.trip_change = self.trip_change + is_change.astype(float)
         self.trip_no_change = self.trip_no_change + (~is_change).astype(float)
-
+ 
         RT, K, rv = self._risk_from_counts(self.trip_no_change, self.trip_change)
         self._last_RT, self._last_K, self._last_rv = RT, K, rv
-
+ 
         sys_RT, sys_K, sys_rv = self._risk_from_counts(
             np.array([self.trip_no_change.sum()]), np.array([self.trip_change.sum()]))
         self._last_system_RT = float(sys_RT[0])
         self._last_system_K = float(sys_K[0])
         self._last_system_rv = float(sys_rv[0])
-
+ 
         if self.disaster_active:
             self.trip_change_disaster = self.trip_change_disaster + is_change.astype(float)
             self.trip_no_change_disaster = self.trip_no_change_disaster + (~is_change).astype(float)
         RT_d, K_d, rv_d = self._risk_from_counts(self.trip_no_change_disaster, self.trip_change_disaster)
         self._last_RT_disaster, self._last_K_disaster, self._last_rv_disaster = RT_d, K_d, rv_d
-
+ 
         sys_RT_d, sys_K_d, sys_rv_d = self._risk_from_counts(
             np.array([self.trip_no_change_disaster.sum()]), np.array([self.trip_change_disaster.sum()]))
         self._last_system_RT_disaster = float(sys_RT_d[0])
         self._last_system_K_disaster = float(sys_K_d[0])
         self._last_system_rv_disaster = float(sys_rv_d[0])
         return RT, K, rv
-
+ 
     def _driver_states(self):
         """Compact per-vehicle state for the driving-action policy: own
         speed, mean neighbor speed, nearest-neighbor distance, left/right
@@ -662,7 +669,7 @@ class V2XEnv:
             steer = self.steering_angle[i] / cfg.max_steering_rad
             states.append(np.array([v_s, v_mean, d_min, lsp, rsp, lat, steer]))
         return states
-
+ 
     def step(self, combined_actions: np.ndarray, intents: np.ndarray, drive_actions: np.ndarray):
         """combined_actions[i] encodes (power_level, offload_choice) for
         vehicle i via combined = power_idx * n_offload_choices + offload_idx.
@@ -671,7 +678,7 @@ class V2XEnv:
         n_off = cfg.n_offload_choices
         power_idx = combined_actions // n_off
         offload_idx = combined_actions % n_off
-
+ 
         # ---- adaptive communication interval: a vehicle only gets a real
         # transmission opportunity on steps aligned with its cluster's
         # currently-chosen interval; off-steps it stays silent (no airtime,
@@ -680,18 +687,18 @@ class V2XEnv:
         interval_per_vehicle = self.cluster_interval[self.cluster_of]
         active_mask = (self.t % interval_per_vehicle) == 0
         self.t += 1
-
+ 
         # ---- communication (V2I: vehicle <-> RSU/infrastructure link) ----
         p_levels_dbm = np.linspace(0, cfg.p_max_dbm, cfg.n_power_levels)
         tx_power_dbm = p_levels_dbm[power_idx]
         tx_power_mw = 10 ** (tx_power_dbm / 10)
         tx_power_mw = np.where(active_mask, tx_power_mw, 0.0)   # silent vehicles emit nothing
-
+ 
         gain_db = self._last_gain_db
         gain_lin = 10 ** (gain_db / 10)
         noise_mw = 10 ** (cfg.noise_dbm / 10)
         rx_power_mw = tx_power_mw * gain_lin
-
+ 
         sinr_db = np.zeros(self.n)
         throughput_bits = np.zeros(self.n)
         for i in range(self.n):
@@ -702,18 +709,18 @@ class V2XEnv:
             sinr_db[i] = 10 * np.log10(sinr_lin + 1e-15)
             rb_share_hz = cfg.bandwidth_hz / cfg.n_rbs
             throughput_bits[i] = rb_share_hz * np.log2(1 + sinr_lin)
-
+ 
         served = np.minimum(self.queue, throughput_bits)
         self.queue = self.queue - served
         arrivals = self.rng.exponential(cfg.arrival_rate_bits, self.n)
         self.queue = np.clip(self.queue + arrivals, 0, cfg.max_queue_bits)
-
+ 
         reliability_ok = (sinr_db >= cfg.sinr_threshold_db).astype(float)
         energy_cost = tx_power_mw / (10 ** (cfg.p_max_dbm / 10))
-
+ 
         comm_reward_raw = (served / cfg.max_queue_bits) - 0.05 * energy_cost - 0.5 * (1 - reliability_ok)
         comm_reward = active_mask * comm_reward_raw   # silence is a choice, not a failed transmission
-
+ 
         # ---- Transmission Delay (TD): steps since this vehicle last had a
         # successful (active + reliable) delivery, i.e. how far the actual
         # arrival time has drifted past the "expected" immediate (every-
@@ -721,7 +728,7 @@ class V2XEnv:
         delivered = active_mask & reliability_ok.astype(bool)
         transmission_delay = self.steps_since_delivery.copy()   # delay observed going into this step
         self.steps_since_delivery = np.where(delivered, 0.0, self.steps_since_delivery + 1.0)
-
+ 
         # ---- edge / local compute offloading (V2I: vehicle <-> edge server) ----
         has_task = self.rng.random(self.n) < cfg.task_prob
         task_cycles = self.rng.exponential(cfg.task_cycles_mean, self.n) * has_task
@@ -740,14 +747,14 @@ class V2XEnv:
                     self.edges[edge_id].enqueue(task_cycles[i], cfg.task_deadline_steps, i)
                 else:
                     task_reward[i] -= cfg.task_fail_penalty  # offload request lost in transit
-
+ 
         for edge in self.edges:
             completed, failed = edge.step()
             for i in completed:
                 task_reward[i] += cfg.task_success_bonus
             for i in failed:
                 task_reward[i] -= cfg.task_fail_penalty
-
+ 
         # ---- VLA-driven hazard-priority reward shaping ----
         hazard_idx = VLAPipeline.INTENTS.index("hazard_alert")
         is_hazard_intent = (intents == hazard_idx)
@@ -756,23 +763,23 @@ class V2XEnv:
             np.where(reliability_ok.astype(bool), cfg.hazard_success_bonus, -cfg.hazard_fail_penalty),
             0.0,
         )
-
+ 
         worker_reward = comm_reward + task_reward + intent_reward
-
+ 
         self.pos = (self.pos + self.vel * 0.1) % cfg.road_length_m
         wall_blockage_db, construction_zone, lane_conflict, nearest_obs_dist = self._obstacle_features()
         self._apply_drive_kinematics(drive_actions)
-
+ 
         # ---- driving reward: r_s + r_n + r_dt, evaluated now that this
         # step's motion has happened ----
         drive_total, drive_info, safety_violation = self.driving_reward(drive_actions)
         self.collision_count_episode += drive_info["n_collisions"]
-
+ 
         # ---- obstacle penalty: stuck in a construction site's closed lane
         # band -- pushes the vehicle to actually change lanes rather than
         # just tolerate the obstacle ----
         obstacle_penalty = np.where(lane_conflict, -cfg.obstacle_penalty_weight, 0.0)
-
+ 
         # ---- risk tolerance RT, adaptive capacity K, and risk value rv:
         # derived from each vehicle's OD-pair path-change trip history
         # (t = steps without a lane change, t_c = steps with one):
@@ -784,7 +791,7 @@ class V2XEnv:
         # trait of the vehicle's trip, not this step's specific action. ----
         RT, K, rv = self._update_risk_metrics(drive_actions)
         risk_reward = -rv * cfg.risk_penalty_weight
-
+ 
         # The comm/offload agent's reward stays scoped to comms, compute
         # offload, hazard-message delivery, OD-pair risk value, and
         # obstacles; the driving action (forward/left/right/reverse) is a
@@ -792,7 +799,7 @@ class V2XEnv:
         # actor-critic (see HierarchicalTrainer.drivers) -- they are
         # trained side by side, not summed into one scalar.
         worker_reward = worker_reward + risk_reward + obstacle_penalty
-
+ 
         info = dict(sinr_db=sinr_db, throughput_bits=throughput_bits,
                     reliability=reliability_ok, queue=self.queue.copy(),
                     edge_queue_lens=[e.queue_len() for e in self.edges],
@@ -828,6 +835,7 @@ class V2XEnv:
                     n_collisions=drive_info["n_collisions"],                    # NC (this step, event-based)
                     collisions_episode_total=self.collision_count_episode)      # NC (cumulative this episode)
         return worker_reward, drive_total, info
-
+ 
     def cluster_reward(self, worker_reward: np.ndarray) -> list[float]:
         return [worker_reward[idx].mean() for idx in self.clusters]
+ 
