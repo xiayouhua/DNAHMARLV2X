@@ -94,8 +94,7 @@ Everything is still pure NumPy (no torch/tf available in this
 environment). Both hierarchy levels are trained with actor-critic (see
 point 5) rather than plain REINFORCE.
  
-5. ACTOR-CRITIC LEARNING (replaces the earlier REINFORCE + moving-average
-   baseline)
+5. ACTOR-CRITIC LEARNING 
    Every manager and every worker is now an `ActorCritic` pair: an
    `MLPPolicy` actor plus an `MLPValue` critic that learns the
    state-value function V(s) via TD targets. The critic's estimate
